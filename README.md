@@ -28,6 +28,7 @@ LAMPS config file - human-readable text file (tab-separated values [TSV] format)
 6) *optional*: normalization factors - one or more normalization factors found in their own additional columns (i.e., if there are three normalization factors, then there will be 8 columns present in the config file). LAMPS will multiply factors together.
 
 &nbsp;&nbsp;&nbsp;&nbsp;*Columns 5-8 are specific to 2C-ChIP product handling and not typically performed on 5C data
+
 &nbsp;&nbsp;&nbsp;&nbsp;*Example config files can be found in the example 2C-ChIP and 5C folders
 
 Primer file - human-readable text file (TSV format) with eight required columns:
