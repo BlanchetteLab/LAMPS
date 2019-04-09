@@ -16,7 +16,9 @@ Installation is expected to take a few minutes:
 2) If any of the required Python modules are not installed, install them using Anaconda (https://conda.io/docs/user-guide/install/download.html).
 3) If BLAST is not installed, install it (https://www.ncbi.nlm.nih.gov/books/NBK279671/) and make sure the BLAST executable is in your path.
 5) If sequencing files are in BAM format and SAMtools is not installed, install it (http://www.htslib.org/download/) and make sure the SAMtools executable is in your path.
-6) Download and uncompress the example directories for the following test 2C-ChIP and 5C data sets from Wang et al. 2019 into the LAMPS/ directory: https://www.cs.mcgill.ca/~blanchem/LAMPS/LAMPS_examples.tar.gz
+6) Download and uncompress the example directories for the following test 2C-ChIP and 5C data sets from Wang et al. 2019 into the LAMPS/ directory:
+    * 2C-ChIP example: https://www.cs.mcgill.ca/~blanchem/LAMPS/2C-ChIP.tar.gz
+    * 5C example: https://www.cs.mcgill.ca/~blanchem/LAMPS/5C.tar.gz
 
 ## Input
 LAMPS config file - human-readable text file (tab-separated values [TSV] format) with three required and 5 optional columns:
