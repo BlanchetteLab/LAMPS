@@ -7,7 +7,7 @@ The 'Ligation-mediated Amplified, Multiplexed Paired-end Sequence' or LAMPS is i
 ## Software requirements
 1) Python (v2 or v3): https://conda.io/docs/user-guide/install/download.html (recommended)
 2) BLAST (v2.5.0+ tested): https://www.ncbi.nlm.nih.gov/books/NBK279671/
-3) SAMtools (v1.3.1 tested - optional for BAM file processing): anaconda (see above) or https://formulae.brew.sh/formula/samtools or http://samtools.sourceforge.net/
+3) SAMtools (v1.3.1 tested - optional for BAM file processing): via Anaconda (https://conda.io/docs/user-guide/install/download.html) or https://formulae.brew.sh/formula/samtools or http://samtools.sourceforge.net/
 4) *MacOS users* - gnu-sed (v4.7 tested): https://formulae.brew.sh/formula/gnu-sed
 
 ## Installation guide
