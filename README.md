@@ -74,7 +74,7 @@ results/ - directory containing the following final output of LAMPS:
 
 ### Secondary output
 
-The following directories contain files specific to primer or mapping Quality Control (QC)
+The following directories contain files specific to primer or mapping Quality Control (QC).
 
 primer_files/ - directory containing the following files relevant to the primer pair analysis:
 * *.fasta - ligated primer pair and short read FASTA files used as input to BLAST
