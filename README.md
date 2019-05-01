@@ -2,13 +2,13 @@
 Sequence analysis pipeline for 2C-ChIP and 5C products
 
 ## Overview
-The 'Ligation-mediated Amplified, Multiplexed Paired-end Sequence' or LAMPS is is a Linux/MacOS command line interface for analyzing paired-end sequences, which may or may not be multiplexed. LAMPS uses BLAST to map sequenced 2C-ChIP and 5C products to expected primer pairs.
+The 'Ligation-mediated Amplified, Multiplexed Paired-end Sequence' or LAMPS is is a Linux/MacOS command line interface for analyzing paired-end sequences, which may or may not be multiplexed.
 
 ## Software requirements
 1) Python (v2 or v3): https://conda.io/docs/user-guide/install/download.html (recommended)
 2) BLAST (v2.5.0+ tested): https://www.ncbi.nlm.nih.gov/books/NBK279671/
 3) SAMtools (v1.3.1 tested - optional for BAM file processing): via Anaconda (https://conda.io/docs/user-guide/install/download.html) or https://formulae.brew.sh/formula/samtools or http://samtools.sourceforge.net/
-4) *MacOS users* - gnu-sed (v4.7 tested): https://formulae.brew.sh/formula/gnu-sed
+4) *MacOS users only* - gnu-sed (v4.7 tested): https://formulae.brew.sh/formula/gnu-sed
 
 ## Installation guide
 Installation is expected to take a few minutes:
@@ -19,31 +19,6 @@ Installation is expected to take a few minutes:
 6) Download and uncompress the example directories for the following test 2C-ChIP and 5C data sets from Wang et al. 2019 into the LAMPS/ directory:
     * 2C-ChIP example: https://www.cs.mcgill.ca/~blanchem/LAMPS/2C-ChIP.tar.gz
     * 5C example: https://www.cs.mcgill.ca/~blanchem/LAMPS/5C.tar.gz
-
-## Input
-LAMPS config file - human-readable text file (tab-separated values [TSV] format) with three required and 5 optional columns:
-1) *required*: paired-end library name
-2) *required*: barcode sequence for multiplexing - if no barcode, provide empty string ''
-3) *required*: complete file path to sequencing file (FASTQ or BAM)
-4) *optional*: primers to exclude - comma separated list of primer names found in the second column of the primer file (**must be identical**)
-5) *optional*: batch number - user-assigned batch id that groups libraries with respective input library for normalization
-6) *optional*: normalization factors - one or more normalization factors found in their own additional columns (i.e., if there are three normalization factors, then there will be 8 columns present in the config file). LAMPS will multiply factors together.
-
-&nbsp;&nbsp;&nbsp;&nbsp;*Columns 5-8 are specific to 2C-ChIP product handling and not typically performed on 5C data
-
-&nbsp;&nbsp;&nbsp;&nbsp;*Example config files can be found in the example 2C-ChIP and 5C folders
-
-Primer file - human-readable text file (TSV format) with eight required columns:
-1) *required*: genome locus name
-2) *required*: primer name - for excluding primer pairs, these column values must be identical to column four's in the config file
-3) *required*: primer strand - forward 'F' or reverse 'R'
-4) *required*: primer sequence
-5) *required*: genome assembly
-6) *required*: chromosome
-7) *required*: primer starting basepair
-8) *required*: primer ending basepair
-
-&nbsp;&nbsp;&nbsp;&nbsp;*Example primer files can be found in the example 2C-ChIP and 5C folders
 
 ## Quick start
 
@@ -59,25 +34,32 @@ Process 5C sequencing data:
 
 ```python LAMPS.py ./5C/LAMPS.config ./5C/HOXA_5C_primers.txt 5C ./5C/LAMPS_output```
 
-## Output
-primer_files/ - directory containing the following files relevant to the primer pair analysis:
-* *.fasta - ligated primer pair and short read FASTA files (required by BLAST)
-* \*.matrix and *.png - primer pair similarities (bitscore between sequences) matrix and heatmap. Useful for identifying problematic primers.
+## Input
+LAMPS config file - human-readable text file (tab-separated values [TSV] format) with three required and 5 optional columns:
+1) *required*: paired-end library name
+2) *required*: barcode sequence for multiplexing - if no barcode, provide an empty string
+3) *required*: complete file path to sequencing file (FASTQ or BAM)
+4) *optional*: primers to exclude - comma separated list of primer names found in the second column of the primer file (**must be identical**)
+5) *optional*: batch number - user-assigned batch id that groups libraries with respective input library for normalization
+6) *optional*: normalization factors - one or more normalization factors found in their own additional columns (i.e., if there are three normalization factors, then there will be 8 columns present in the config file). LAMPS will multiply factors together.
 
-mapping_files/ - directory containing the following BLASTn mapping and summary files:
-* BLAST/ - directory containing custom BLASTdb files
-* \*.fasta (*.fastq if conversion from BAM required) - FASTA formatted files of sequencing data
-* *.BLAST.tsv - BLASTn output of mapping read data against the ligated primer pair library
-* *.BLAST.log - BLASTn stdout from mapping
-* *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the ligated primer pair library
-* 'BLAST_summary.word_size_<>.tsv' - counts of total and mapped reads for libraries
-* *.read_count.bar_plot.png -  bar plot breakdown of sequenced reads
-* 'read_count_frequency_table.tsv' - counts of sequenced reads breakdown
-* short_read_analysis/ - contains the following files relevant to the secondary mapping of 'unmappables' to the short read library:
-     * *.BLAST.tsv - BLASTn output of mapping read data against the short read library
-     * *.BLAST.log - BLASTn stdout from mapping
-     * *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the short read library
-     * *.short_reads_summary.tsv - counts of total and mapped reads for library
+&nbsp;&nbsp;&nbsp;&nbsp;*Columns 5-8 are used when normalizing 2C-ChIP libraries and not typically applied to 5C data
+
+&nbsp;&nbsp;&nbsp;&nbsp;*Example config files can be found in the example 2C-ChIP and 5C folders
+
+Primer file - human-readable text file (TSV format) with eight required columns:
+1) *required*: genome locus name
+2) *required*: primer name - for excluding primer pairs, these column values must be identical to column four's in the config file
+3) *required*: primer strand - forward 'F' or reverse 'R'
+4) *required*: primer sequence
+5) *required*: genome assembly
+6) *required*: chromosome
+7) *required*: primer starting basepair
+8) *required*: primer ending basepair
+
+&nbsp;&nbsp;&nbsp;&nbsp;*Example primer files can be found in the example 2C-ChIP and 5C folders
+
+## Output
 
 results/ - directory containing the following final output of LAMPS:
 * *.raw.matrix - contains the frequency count of target sequences found within the sequenced library. Note - rows/cols are FWD then RVS primers resulting in the following four quadrants: F-F,F-R,R-F,R-R
@@ -89,6 +71,29 @@ results/ - directory containing the following final output of LAMPS:
 * *.line_plot.png - line plots of either raw or normalized frequency counts of on-diagonal primer pairs
 * 'raw_totals_vs_norm_factor.scatter.png' - scatter plot of normalization factor vs. raw total counts of libraries (expected to show a linear trend - Spearman correlation provided)
 * 'raw_totals_vs_norm_factor.tsv' - values of normalization factor vs. raw total counts of libraries
+
+### Secondary output
+
+The following directories contain files specific to primer or mapping Quality Control (QC)
+
+primer_files/ - directory containing the following files relevant to the primer pair analysis:
+* *.fasta - ligated primer pair and short read FASTA files used as input to BLAST
+* \*.matrix and *.png - primer pair similarities (bitscore between sequences) matrix and heatmap. Useful for identifying problematic primers.
+
+mapping_files/ - directory containing the following BLASTn mapping and summary files:
+* BLAST/ - directory containing custom BLASTdb files
+* \*.fasta (*.fastq if conversion from BAM required) - FASTA formatted files of sequencing data used as input to BLAST
+* *.BLAST.tsv - BLASTn output of mapping read data against the ligated primer pair library
+* *.BLAST.log - BLASTn stdout from mapping
+* *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the ligated primer pair library
+* 'BLAST_summary.word_size_<>.tsv' - counts of total and mapped reads for libraries
+* *.read_count.bar_plot.png -  bar plot breakdown of sequenced reads
+* 'read_count_frequency_table.tsv' - counts of sequenced reads breakdown
+* short_read_analysis/ - contains the following files relevant to the secondary mapping of 'unmappables' to the short read library:
+     * *.BLAST.tsv - BLASTn output of mapping read data against the short read library
+     * *.BLAST.log - BLASTn stdout from mapping
+     * *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the short read library
+     * *.short_reads_summary.tsv - counts of total and mapped reads for library
 
 ## Command line details:
 Processing sequenced 2C-ChIP or 5C data:
