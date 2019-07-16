@@ -51,7 +51,7 @@ Primer file - human-readable text file (TSV format) with eight required columns:
 1) *required*: genome locus name
 2) *required*: primer name - for excluding primer pairs, these column values must be identical to column four's in the config file
 3) *required*: primer strand - forward 'F' or reverse 'R'
-4) *required*: primer sequence
+4) *required*: primer sequence (**without barcode**)
 5) *required*: genome assembly
 6) *required*: chromosome
 7) *required*: primer starting basepair
