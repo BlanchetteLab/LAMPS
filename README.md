@@ -109,6 +109,7 @@ positional arguments:
 optional arguments:
   -h, --help		show this help message and exit
   --num_cpus		set the number of cpus - default = total_num_cpus-2
+  --word_size     set the minimum required sequence length for processing - default = automated calculation
 ```
 
 ## Testing
