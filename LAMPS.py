@@ -1,8 +1,12 @@
 #!/usr/bin/env python
 #
-#   LAMPS - ligated product (LP) mapping (Python v2 or v3)
-#   Maps paired-end sequences to custom BLAST database of defined regions
-#   Author: Christopher J.F. Cameron
+#   LAMPS - 2C-ChIP and 5C library processing (Python v2 or v3)
+#   Steps:
+#       1) maps paired-end sequences to custom BLAST database of defined regions
+#       2) provides barcode/primer Quality Checks (QC)
+#       3) outputs processed data in standardized format: bedGraph (2C-ChIP) and my5C matrix (5C)
+#   See README for more information: https://github.com/BlanchetteLab/LAMPS
+#   Author: Christopher JF Cameron
 #
 
 from __future__ import print_function
@@ -103,7 +107,7 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
         primer_A,primer_B,score = line.split()
         score = float(score)
         if not primer_A == primer_B and score > 0.0 and not warned:
-            print("Warning - two or more primers were found to be similar. Please review QC reports.",end='',file=sys.stderr)
+            print("Warning - two or more primers were found to be similar. Please review QC reports. ",end='',file=sys.stderr)
             warned = True
         #insert score into matrix
         index_A,index_B = primers.index(primer_A),primers.index(primer_B)
@@ -302,6 +306,8 @@ def BLAST_short_reads(dictionary,word_size):
     label_dict = {'u':"Unknown",'F':"FWD",'R':"RVS",'B':"BC+FWD"}
     color_dict={"Total":'k',"Unknown":"grey","FWD":'b',"RVS":'r',"BC+FWD":'w'}
     for key in dictionary.keys():
+        #if not "15Min_Set1" in key:
+        #    continue
         count_dict = {}
         basename = '.'.join(os.path.basename(key).split('.')[:-1])
         print(''.join(["\tProcessing '",basename,"' reads ... "]),end='',file=sys.stderr)
@@ -327,7 +333,7 @@ def BLAST_short_reads(dictionary,word_size):
                         seq_id,freq = [val for val in seq_id.split('_') if val.isdigit()]
                         total_unmapped += int(freq)
                         total += int(freq)
-                        unmapped_seq_dict["id_"+seq_id] = [freq,seq]
+                        unmapped_seq_dict["ID_"+seq_id] = [freq,seq]
                     else:   #   track total reads
                         seq_id,freq = [val for val in seq_id.split('_') if val.isdigit()]
                         total += int(freq)
@@ -341,7 +347,7 @@ def BLAST_short_reads(dictionary,word_size):
         print(''.join(["\tBLAST-ing '",basename,"' short reads ... "]),end='',file=sys.stderr)
         query_filepath = output_filepath
         output_filepath = output_filepath.replace(".unmapped_reads.fasta",".short_reads.BLAST.tsv")
-        BLAST_process = subprocess.Popen(["blastn","-db",os.path.join(blastdb_dir,"short_read.custom_db"),"-word_size",word_size,"-dust","no","-max_target_seqs","1","-num_threads",num_threads,"-outfmt",r"6 qseqid qstart qseq sseqid sstart sseq bitscore","-query",query_filepath,"-out",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+        BLAST_process = subprocess.Popen(["blastn","-db",os.path.join(blastdb_dir,"short_read.custom_db"),"-word_size",word_size,"-dust","no","-max_target_seqs",'1',"-max_hsps",'1',"-num_threads",num_threads,"-outfmt",r"6 qseqid qstart qseq sseqid sstart sseq bitscore","-query",query_filepath,"-out",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
         with open(output_filepath.replace("tsv","log"),'wt') as o:
             o.write(BLAST_process.communicate()[0].decode("utf-8"))
         
@@ -354,11 +360,12 @@ def BLAST_short_reads(dictionary,word_size):
         with open(output_filepath,'at') as o:
             subprocess.Popen(["awk","-F","\\t|_","{OFS=\"\\t\"; print $1\"_\"$2,$4,$6,$7}",input_filepath],stdout=o,stderr=subprocess.STDOUT).communicate()
         #   add unmapped sequences to output
-        mapped_short_reads = set(subprocess.check_output(''.join(["awk -F '\\t' 'NR>1 {print $1}' ",output_filepath]),shell=True).rstrip().split())
+        mapped_short_reads = subprocess.check_output(''.join(["awk -F '\\t' 'NR>1{print $1}' ",output_filepath]),shell=True).rstrip().split()
+        assert(len(mapped_short_reads) == len(set(mapped_short_reads))),"Error - multimapping encountered in short reads library"
         with open(output_filepath,'at') as o:
-            for seq_id in set(unmapped_seq_dict.keys())-mapped_short_reads:
+            for seq_id in set(unmapped_seq_dict.keys())-set(mapped_short_reads):
                 o.write('\t'.join([seq_id]+unmapped_seq_dict[seq_id]+["unknown"])+'\n')
-        
+
         #   store summary of sample in memory
         process_1 = subprocess.Popen(["awk","-F","\\t","NR>1 {print $2,$4}",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         process_2 = subprocess.Popen(["awk","{a[substr($2,1,1)]+=$1}END{for(i in a) print i,a[i]}"],stdin=process_1.stdout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
@@ -377,8 +384,9 @@ def BLAST_short_reads(dictionary,word_size):
         plot_bar(output_filepath.replace(".tsv",".bar_plot.png"),heights,labels,colors,title="Short-reads summary")
         
         total_dict[key] = sum(count_dict.values())
+        assert(total_dict[key] == total_unmapped),"Error - short reads do not sum to expected count"
         print("done",file=sys.stderr)
-    
+        
     return total_dict
 
 def plot_heatmap(output_filepath,matrix,labels):
@@ -406,6 +414,8 @@ def plot_heatmap(output_filepath,matrix,labels):
 
 def plot_bar(output_filepath,y_vals,labels,colors,title="BLAST results of libraries"):
     """creates bar plot of provided heights via MatPlotlib"""
+    if len(y_vals) == 2:
+        title = title.replace("libraries","library")
     fig,ax = plt.subplots(figsize=(8,8))
     ax.set_title(title,fontweight="bold")
     x_ticks = []
@@ -669,6 +679,7 @@ parser.add_argument("primers", help = "path to TSV file containing primer inform
 parser.add_argument("type", help = "source of paired-end reads:[2C-ChIP,5C]")
 parser.add_argument("output", help = "path to output folder", type = str)
 parser.add_argument("--num_cpus", help = "set the number of cpus - default = num_cpus-2", type = str)
+parser.add_argument("--word_size", help = "set the minimum required sequence length for processing", type = int)
 args = parser.parse_args()
 
 assert(args.type in ["2C-ChIP","5C"]),"Error - invalid type provided. Please specify either '2C-ChIP' or '5C'"
@@ -682,6 +693,8 @@ blastdb_dir = create_directory(os.path.join(mapping_dir,"BLAST",''))
 short_read_dir = create_directory(os.path.join(mapping_dir,"short_read_analysis",''))
 results_dir = create_directory(os.path.join(args.output,"results",''))
 
+short_read_dict = None
+
 print("Parsing LAMPS config file ... ",end='',file=sys.stderr)
 #   parse config file
 file_dict,barcode_seqs,min_barcode_length = parse_config(args.config)
@@ -693,7 +706,7 @@ min_fwd_length,min_rvs_length,primer_dict,sorted_primers = build_FASTAs(args.pri
 
 #   map paired-end reads to ligated product BLASTdb
 print("Mapping to ligated-product BLASTdb")
-word_size =  str(min((min_barcode_length+min_fwd_length)*2,
+word_size = args.word_size if not args.word_size == None else str(min((min_barcode_length+min_fwd_length)*2,
                     min_barcode_length+min_fwd_length+min_rvs_length,
                     min_rvs_length+min_rvs_length))
 BLAST_ligated_products(file_dict,word_size)
