@@ -6,7 +6,7 @@
 #       2) provides barcode/primer Quality Checks (QC)
 #       3) outputs processed data in standardized format: bedGraph (2C-ChIP) and my5C matrix (5C)
 #   See README for more information: https://github.com/BlanchetteLab/LAMPS
-#   Author: Christopher JF Cameron
+#   Author: Christopher J.F. Cameron
 #
 
 from __future__ import print_function
@@ -172,7 +172,7 @@ def parse_config(filepath):
         for line in f:
             #   potential columns - library,barcode_seq,filepath,omitted_primers,batch_num,TAQMAN_factor,dilution_factor,lysate_factor
             line = line.rstrip().split('\t')
-            
+            #   process config line values
             library = line[0].replace(' ','_')
             barcode_seq = '' if line[1] in [' ',''] else line[1]
             if os.path.isfile(line[2]):
@@ -187,18 +187,18 @@ def parse_config(filepath):
             norm_factor = np.prod([float(val) for val in line[5:]])
             
             #   handle barcode sequence if present
-            if not barcode_seq is '':
+            if barcode_seq != '':
                 barcode_seqs.add(barcode_seq)
                 barcode_length = len(barcode_seq)
                 min_barcode_length = barcode_length if min_barcode_length == None or barcode_length < min_barcode_length else min_barcode_length 
             
             try: 
-                file_dict[library][barcode_seq]
+                file_dict[filepath][barcode_seq]
                 print("Warning - multiple declarations of a barcode for the same sequencing run found in config file",end='',file=sys.stderr)
             except KeyError: 
                 try: file_dict[filepath][barcode_seq] = {"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}
                 except KeyError: file_dict[filepath] = {barcode_seq:{"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}}
-                    
+    
     return file_dict,barcode_seqs,(min_barcode_length if not min_barcode_length is None else 0)
 
 def create_directory(directory):
@@ -241,7 +241,7 @@ def BLAST_ligated_products(file_dict,word_size):
      
     filepaths = []
     read_counts = [[],[]]  #[[total_reads1,total_reads2,...],[mapped_reads1,mapped_reads2,...]]
-    keys = file_dict.keys()
+    keys = file_dict.keys() if python_2 else list(file_dict.keys())
     for key in keys:
         basename = '.'.join(os.path.basename(key).split('.')[:-1])
         
@@ -317,7 +317,6 @@ def BLAST_short_reads(dictionary,word_size):
         mapped_ids = set(subprocess.check_output(''.join(["awk -F '\\t' '{print $1}' ",filepath]),shell=True).decode("utf-8").rstrip().split())
         #   get total number of mapped reads
         total_mapped = sum([int(seq_id.split('_')[-1]) for seq_id in mapped_ids])
-        
         #   parse out 'unmappables'
         unmapped_seq_dict = {}
         total_unmapped,total = 0,0
@@ -360,7 +359,7 @@ def BLAST_short_reads(dictionary,word_size):
         with open(output_filepath,'at') as o:
             subprocess.Popen(["awk","-F","\\t|_","{OFS=\"\\t\"; print $1\"_\"$2,$4,$6,$7}",input_filepath],stdout=o,stderr=subprocess.STDOUT).communicate()
         #   add unmapped sequences to output
-        mapped_short_reads = subprocess.check_output(''.join(["awk -F '\\t' 'NR>1{print $1}' ",output_filepath]),shell=True).rstrip().split()
+        mapped_short_reads = subprocess.check_output(''.join(["awk -F '\\t' 'NR>1{print $1}' ",output_filepath]),shell=True).decode("utf-8").rstrip().split()
         assert(len(mapped_short_reads) == len(set(mapped_short_reads))),"Error - multimapping encountered in short reads library"
         with open(output_filepath,'at') as o:
             for seq_id in set(unmapped_seq_dict.keys())-set(mapped_short_reads):
@@ -382,7 +381,6 @@ def BLAST_short_reads(dictionary,word_size):
             heights.append(sum(count_dict.values()) if label == "Total" else count_dict[label])
             colors.append(color_dict[label])
         plot_bar(output_filepath.replace(".tsv",".bar_plot.png"),heights,labels,colors,title="Short-reads summary")
-        
         total_dict[key] = sum(count_dict.values())
         assert(total_dict[key] == total_unmapped),"Error - short reads do not sum to expected count"
         print("done",file=sys.stderr)
