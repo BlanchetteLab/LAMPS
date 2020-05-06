@@ -5,16 +5,18 @@ Sequence analysis pipeline for 2C-ChIP and 5C products
 The 'Ligation-mediated Amplified, Multiplexed Paired-end Sequence' or LAMPS is is a Linux/MacOS command line interface for analyzing paired-end sequences, which may or may not be multiplexed.
 
 ## Software requirements
-1) Python (v2.7.15 or v3.8.0 tested): https://conda.io/docs/user-guide/install/download.html (recommended)
-2) BLAST (v2.5.0+ tested): https://www.ncbi.nlm.nih.gov/books/NBK279671/
-3) SAMtools (v1.3.1 tested - optional for BAM file processing): via Anaconda (https://conda.io/docs/user-guide/install/download.html) or https://formulae.brew.sh/formula/samtools or http://samtools.sourceforge.net/
-4) *MacOS users only* - gnu-sed (v4.7 tested): https://formulae.brew.sh/formula/gnu-sed
+1) Python (v2.7.15 or v3.8.1 tested): https://conda.io/docs/user-guide/install/download.html (recommended)
+2) Bowtie 2 (v2.3.4.2 tested): http://bowtie-bio.sourceforge.net/bowtie2/manual.shtml (recommended)
+OR 
+BLAST (v2.5.0+ tested): https://www.ncbi.nlm.nih.gov/books/NBK279671/
+4) SAMtools (v1.3.1 tested - optional for BAM file processing): via Anaconda (https://conda.io/docs/user-guide/install/download.html) or https://formulae.brew.sh/formula/samtools or http://samtools.sourceforge.net/
+5) *MacOS users only* - gnu-sed (v4.7 tested): https://formulae.brew.sh/formula/gnu-sed
 
 ## Installation guide
 Installation is expected to take a few minutes:
 1) Either download the package by clicking the "Clone or download" button, unzipping file in desired location, and renaming the directory "LAMPS"   OR   Use the command line ``` git clone https://github.com/BlanchetteLab/LAMPS ```.
 2) If any of the required Python modules are not installed, install them using Anaconda (https://conda.io/docs/user-guide/install/download.html).
-3) If BLAST is not installed, install it (https://www.ncbi.nlm.nih.gov/books/NBK279671/) and make sure the BLAST executable is in your path.
+3) If Bowtie 2 or BLAST are not installed, install one and make sure the executable is in your path.
 5) If sequencing files are in BAM format and SAMtools is not installed, install it (http://www.htslib.org/download/) and make sure the SAMtools executable is in your path.
 6) Download and uncompress the example directories for the following test 2C-ChIP and 5C data sets from Wang et al. 2019 into the LAMPS/ directory:
     * 2C-ChIP example: https://www.cs.mcgill.ca/~blanchem/LAMPS/2C-ChIP.tar.gz
@@ -62,37 +64,38 @@ Primer file - human-readable text file (TSV format) with eight required columns:
 ## Output
 
 results/ - directory containing the following final output of LAMPS:
-* *.raw.matrix - contains the frequency count of target sequences found within the sequenced library. Note - rows/cols are FWD then RVS primers resulting in the following four quadrants: F-F,F-R,R-F,R-R
-* *log_raw.heatmap.png - heat map of the log(values) found in *.raw.matrix
+* results/interaction_matrices/*.raw.matrix - contains the frequency count of target sequences found within the sequenced library. Note - rows/cols are FWD then RVS primers resulting in the following four quadrants: F-F,F-R,R-F,R-R
+* results/interaction_matrices/*log_raw.heatmap.png - heat map of the log(Frequency values) found in *.raw.matrix
 
 &nbsp;&nbsp;&nbsp;&nbsp;*2C-ChIP specific output in the results/*:
-* *.raw.bedGraph - raw frequency count of on-diagonal primer pairs in bedGraph format (easily viewable on most genome browsers)
-* *.norm.bedGraph - normalized frequency count of on-diagonal primer pairs (will be input normalized if input library was found - please see LAMPS stdout to be sure, a warning will be thrown if not found)
-* *.line_plot.png - line plots of either raw or normalized frequency counts of on-diagonal primer pairs
-* 'raw_totals_vs_norm_factor.scatter.png' - scatter plot of normalization factor vs. raw total counts of libraries (expected to show a linear trend - Spearman correlation provided)
-* 'raw_totals_vs_norm_factor.tsv' - values of normalization factor vs. raw total counts of libraries
+* results/bedGraphs/raw/*.raw.bedGraph - raw frequency count of on-diagonal primer pairs in bedGraph format (easily viewable on most genome browsers)
+* results/bedGraphs/norm/*.norm.bedGraph - normalized frequency count of on-diagonal primer pairs (will be input normalized if input library was found - please see LAMPS stdout to be sure, a warning will be thrown if not found)
+* line_plots/< RPM or norm >/*.line_plot.png - line plots of either raw or normalized frequency counts of on-diagonal primer pairs
+* results/raw_totals_vs_norm_factor.scatter.png - scatter plot of normalization factor vs. raw total counts of libraries (expected to show a linear trend - Spearman correlation provided)
+* results/raw_totals_vs_norm_factor.tsv - values of normalization factor vs. raw total counts of libraries
 
 ### Secondary output
 
 The following directories contain files specific to primer or mapping Quality Control (QC).
 
 primer_files/ - directory containing the following files relevant to the primer pair analysis:
-* *.fasta - ligated primer pair and short read FASTA files used as input to BLAST
-* \*.matrix and *.png - primer pair similarities (bitscore between sequences) matrix and heatmap. Useful for identifying problematic primers.
+* *.fasta - ligated primer pair and short sequences FASTA files used as input to read aligner
+* \*.matrix and *.png - primer pair similarities (BLAST bit or Bowtie 2 alignment scores between sequences) matrix and heat map. Useful for identifying problematic primers.
 
-mapping_files/ - directory containing the following BLASTn mapping and summary files:
-* BLAST/ - directory containing custom BLASTdb files
-* \*.fasta (*.fastq if conversion from BAM required) - FASTA formatted files of sequencing data used as input to BLAST
-* *.BLAST.tsv - BLASTn output of mapping read data against the ligated primer pair library
-* *.BLAST.log - BLASTn stdout from mapping
-* *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the ligated primer pair library
-* 'BLAST_summary.word_size_<>.tsv' - counts of total and mapped reads for libraries
+mapping_files/ - directory containing the following mapping and summary files:
+* blastn_files/ - directory containing custom BLAST database files
+* bowtie2_files/ - directory containing Bowtie 2 indices
+* \*.fasta (*.fastq if conversion from BAM required) - FASTA formatted files of sequencing data used as input to read aligner
+* *.mapped.tsv (BLAST) or *.mapped.sam (Bowtie2) - output of mapping read data against the ligated primer pair library
+* *.mapped.log - stdout from mapping
+* *.mapping_summary.bar_plot.png - plot of total and mapped reads to the ligated primer pair library
+* mapping_summary.tsv - counts of total and mapped reads for libraries
 * *.read_count.bar_plot.png -  bar plot breakdown of sequenced reads
-* 'read_count_frequency_table.tsv' - counts of sequenced reads breakdown
-* short_read_analysis/ - contains the following files relevant to the secondary mapping of 'unmappables' to the short read library:
-     * *.BLAST.tsv - BLASTn output of mapping read data against the short read library
-     * *.BLAST.log - BLASTn stdout from mapping
-     * *.BLAST_summary.bar_plot.png - plot of total and mapped reads to the short read library
+* read_count_frequency_table.tsv - counts of sequenced reads breakdown
+* short_read_analysis/ - contains the following files relevant to the secondary mapping of 'unmappables' to the short sequences library:
+     * *.mapped.tsv (BLAST) or *.mapped.sam (Bowtie2) - output of mapping read data against the short sequences library
+     * *.mapped.log - stdout from mapping
+     * *_summary.bar_plot.png - plot of total and mapped reads to the short read library
      * *.short_reads_summary.tsv - counts of total and mapped reads for library
 
 ## Command line details:
@@ -109,7 +112,8 @@ positional arguments:
 optional arguments:
   -h, --help		show this help message and exit
   --num_cpus		set the number of cpus - default = total_num_cpus-2
-  --word_size     set the minimum required sequence length for processing - default = automated calculation
+  --word_size     	set the minimum required sequence length for processing (BLAST) - default = automated calculation
+  --no_index_build	don't re-build Bowtie 2 indices if present
 ```
 
 ## Testing
