@@ -2,23 +2,35 @@
 #
 #   LAMPS - 2C-ChIP and 5C library processing (Python v2 or v3)
 #   Steps:
-#       1) maps paired-end sequences to custom BLAST database of defined regions
+#       1) maps paired-end sequences to defined regions
 #       2) provides barcode/primer Quality Checks (QC)
 #       3) outputs processed data in standardized format: bedGraph (2C-ChIP) and my5C matrix (5C)
 #   See README for more information: https://github.com/BlanchetteLab/LAMPS
-#   Author: Christopher J.F. Cameron
+#   Author: Christopher JF Cameron
 #
 
 from __future__ import print_function
 
-import argparse,glob,itertools,math,matplotlib,multiprocessing,os,re,shutil,subprocess,sys
+import argparse
+import glob
+import itertools
+import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import multiprocessing
 import numpy as np
+import os
+import re
+import shutil
+import subprocess
+import sys
 
 from os import environ
 from scipy.stats import spearmanr
 
+global aligner
+global num_threads
+global no_index_build
 
 #   check Python and sed versions being used
 python_2 = True
@@ -27,24 +39,187 @@ if sys.version_info > (3, 0):
 sed_cmd = "sed" if sys.platform in ["linux","linux2"] else "gsed"
 
 #   prevent MatPlotlib view window from opening
-plt.ioff()  
+plt.ioff()
 
-#   check if BLAST can be found in the 'PATH' variable
-if not re.search(r'.+blast.+',os.environ["PATH"].lower()):
-    print("Error - BLAST cannot be found in the 'PATH' environmental variable. Please ensure BLAST is installed")
-    sys.exit(-2)
-
-#   check if samtools can be found in the 'PATH' variable for BAM->FASTQ conversion
-if not re.search(r'.+samtools.+',os.environ["PATH"].lower()):
-    print("Warning - samtools cannot be found in the 'PATH' environmental variable. BAM input will lead to errors")
-
-def get_range(start,stop,step):
-    """returns range useing Python version specific function"""
-    return xrange(start,stop,step) if python_2 else range(start,stop,step)
+##
+#   Helper functions
+##
     
+def align_sequences(command,log_file):
+    """template function to map reads"""
+    align_process = subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+    with open(log_file,'wt') as o:
+        o.write(align_process.communicate()[0].decode("utf-8"))
+
+def adjust_plot_parameters(ax,y_label=None,x_label=None,x_top=False):
+    """adjust common Matplotlib attributes"""
+    #   adjust axes ticks and labels
+    ax.tick_params(axis='x',which="both",bottom=False if x_top else True,top=True if x_top else False,direction="out",length=4,width=0.5,color='k')
+    if not x_label == None:
+        ax.set_xlabel(x_label)
+    ax.tick_params(axis='y',which="both",left=True,right=False,direction="out",length=4,width=0.5,color='k')
+    if not y_label == None:
+        ax.set_ylabel(y_label)
+    
+    #   adjust splines
+    for axis in ["bottom","left","right","top"] if x_top else ["bottom","left"]:   
+        ax.spines[axis].set_visible(True)
+        ax.spines[axis].set_color('k')
+        ax.spines[axis].set_linewidth(1.)
+    if x_top:
+        ax.xaxis.set_label_position("top") 
+        ax.xaxis.tick_top()
+        ax.set_aspect("equal")
+    else:
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        
+def blast_align(in_fasta,word_size,num_targets,out_file,db_path=None,hsps=False):
+    """aligns sequences using BLAST"""
+    command = ["blastn","-word_size",str(word_size),"-max_target_seqs",str(num_targets),"-dust","no","-outfmt",r"6 qseqid qstart qseq sseqid sstart sseq bitscore"]
+    if db_path is None:
+        command += ["-query",in_fasta,"-subject",in_fasta]
+    else:
+        command += ["-db",db_path,"-query",in_fasta]
+    if hsps:
+        command += ["-max_hsps",'1']
+    command += ["-out",out_file]
+    align_sequences(command,out_file.replace(".tsv",".log"))
+    
+def bowtie2_align(in_fasta,indices_prefix,out_file,report_all=False,local=False):
+    """aligns sequences using Bowtie 2"""
+    command = ["bowtie2","--all"] if report_all else ["bowtie2","--local"] if local else ["bowtie2"]
+    command = command + ["-p",str(num_threads),"-x",indices_prefix,"-f",in_fasta,"-S",out_file,"--no-unal","--no-hd","--no-sq"]
+    align_sequences(command,out_file.replace(".sam",".log"))
+
+def create_blast_database(log_file,in_fasta,out_prefix):
+    """creates custom BLAST database"""
+    with open(log_file,'wt') as o:
+        subprocess.check_call(["makeblastdb","-in",in_fasta,"-dbtype","nucl","-out",out_prefix],stdout=o,stderr=subprocess.STDOUT)
+
+def create_bowtie2_indices(log_file,input_fasta,indices_prefix):
+    """creates Bowtie 2 indices"""
+    with open(log_file,'wt') as o:
+        subprocess.check_call(["bowtie2-build",input_fasta,indices_prefix],stdout=o,stderr=subprocess.STDOUT)
+        
+def create_directory(directory):
+    """creates directory if it does not exist"""
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+    
+    return directory
+        
+def get_range(start,stop,step):
+    """returns range using Python version-specific function"""
+    return xrange(start,stop,step) if python_2 else range(start,stop,step)
+        
+def os_which(exe):
+    """returns file path to executable if found in 'PATH' environment variable"""
+    env = os.getenv('PATH')
+    for path in env.split(os.path.pathsep):
+        path = os.path.join(path,exe)
+        if os.path.exists(path) and os.access(path,os.X_OK):
+            return path
+    
+    return None
+    
+def plot_bar(out_file,y_vals,labels,colors,title="Mapping results of libraries"):
+    """creates bar plot of provided heights via MatPlotlib"""
+    if len(y_vals) == 2:
+        title = title.replace("libraries","library")
+    fig,ax = plt.subplots(figsize=(8,8))
+    ax.set_title(title,fontweight="bold")
+    x_ticks = []
+    for i,(height,color) in enumerate(zip(y_vals,colors)):
+        ax.bar(i,height,1.,color=color,edgecolor='k')
+        x_ticks.append(i+0.5)
+    ax.grid(False)
+    ax.set_xlim([-1,6])
+    ax.set_xticks(x_ticks)
+    ax.set_xticklabels(labels,rotation=40,ha="right")
+    adjust_plot_parameters(ax,y_label="Read count frequency")
+    plt.savefig(out_file,format="png",transparent=True,dpi=300.0, bbox_inches="tight")
+    plt.close()
+    
+def plot_heatmap(out_file,matrix,labels,cb_label=None):
+    """creates heatmap of matrix via MatPlotlib"""
+    n = len(labels)
+    labels = [val.split('@')[1] for i,val in enumerate(labels)]
+    #   create heatmap of bitwise scores
+    fig,ax = plt.subplots(figsize=(8,8),facecolor='w')
+    im = ax.imshow(matrix,cmap="gist_heat_r",interpolation="none")
+    ax.grid(False)
+    cb = plt.colorbar(im,fraction=0.046,pad=0.04)
+    cb.outline.set_visible(False)
+    cb.ax.tick_params(axis='y', direction='out')
+    if not cb_label is None:
+        cb.set_label(cb_label)
+    #create ticks
+    tick_labels,tick_positions = [],[]
+    for i in get_range(0,n,n//10):
+        tick_positions.append(i)
+        tick_labels.append(labels[i])
+    plt.xticks(tick_positions,tick_labels,rotation=-45,ha="right")
+    plt.yticks([val for val in tick_positions],tick_labels)
+    adjust_plot_parameters(ax,x_top=True)
+    plt.tight_layout()
+    plt.savefig(out_file,format="png",transparent=False,dpi=300.0)
+    plt.close()
+
+def print_flush(string):
+    """prints string using Python version-specific flush"""
+    if python_2:
+        print(string,end='',file=sys.stderr)
+    else:
+        print(string,end='',file=sys.stderr,flush=True)
+
+###
+#   Main functions
+###
+
+def parse_config(filepath):
+    """parses LAMP config file and returns user-defined parameters"""
+    file_dict = {}
+    barcode_seqs = set([])
+    min_barcode_length,norm_factor = None,None
+    with open(filepath,'rU' if python_2 else 'rt') as f:
+        #   format: dict[filepath][barcode] = {"label":,"omitted":,"norm_factor":}
+        #   one line per barcode, multiple lines per file if many barcodes sequenced together
+        for line in f:
+            #   potential columns - library,barcode_seq,filepath,omitted_primers,batch_num,TAQMAN_factor,dilution_factor,lysate_factor
+            line = line.rstrip().split('\t')
+            #   process config line values
+            library = line[0].replace(' ','_')
+            barcode_seq = '' if line[1] in [' ',''] else line[1]
+            if os.path.isfile(line[2]):
+                filepath = line[2]
+            else:
+                print(''.join(["Error - sequencing file '",line[2],"' does not exist"]))
+                sys.exit(-2)
+            try: omitted_primers = set([]) if line[3] in [' ',''] else set(line[3].replace('"','').split(','))
+            except IndexError: omitted_primers = set([])   #   no omitted primer column provided
+            try: batch_num = int(line[4])
+            except IndexError or ValueError: batch_num = None
+            norm_factor = np.prod([float(val) for val in line[5:]])
+            
+            #   handle barcode sequence if present
+            if barcode_seq != '':
+                barcode_seqs.add(barcode_seq)
+                barcode_length = len(barcode_seq)
+                min_barcode_length = barcode_length if min_barcode_length == None or barcode_length < min_barcode_length else min_barcode_length 
+            
+            try: 
+                file_dict[filepath][barcode_seq]
+                print("Warning - multiple declarations of a barcode for the same sequencing run found in config file",end='',file=sys.stderr,flush=True)
+            except KeyError: 
+                try: file_dict[filepath][barcode_seq] = {"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}
+                except KeyError: file_dict[filepath] = {barcode_seq:{"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}}
+    
+    return file_dict,barcode_seqs,(min_barcode_length if not min_barcode_length is None else 0)
+
 def build_FASTAs(filepath,file_dict,barcodes=None):
-    """parses provided primer file and creates FASTA files for BLASTdb generation"""
-    print("\tParsing primer file ... ",end='',file=sys.stderr)
+    """parses provided primer file and creates FASTA files"""
+    print_flush("\tParsing primer file ... ")
     #   create look-up table of omitted primers
     omitted_primers = set([])
     for key in file_dict.keys():
@@ -79,7 +254,7 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
                 min_rvs_length = seq_length if min_rvs_length == None or seq_length < min_rvs_length else min_rvs_length     
     print("done",file=sys.stderr)
     
-    print("\tProcessing primers ... ",end='',file=sys.stderr)
+    print_flush("\tProcessing primers ... ")
     #   sort primers by genomic locus
     fwd_primers = [val[0] for val in sorted([[primer,primer_dict[primer]["chrom"],primer_dict[primer]["start"]] for primer in fwd_primers],key=lambda x:(x[1],x[2]))]
     rvs_primers = [val[0] for val in sorted([[primer,primer_dict[primer]["chrom"],primer_dict[primer]["start"]] for primer in rvs_primers],key=lambda x:(x[1],x[2]))]
@@ -90,44 +265,61 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
         for barcode in file_dict[key].keys():
             file_dict[key][barcode]["omitted_primers"] = [primers.index(lookup_dict[omitted_primer]) for omitted_primer in file_dict[key][barcode]["omitted_primers"]]
     
+    ##
     #   create similarity matrix for bit scores of primer sequences
+    ##
+    
     n = len(primers)
     matrix = np.zeros((n,n),dtype=float)
     word_size = min(min_fwd_length,min_rvs_length)
-    #   iterate over possible primer pairs: F-F,F-R,R-F,R-R
+    
+    #   create FASTA of primers
     tmp_dir = create_directory(os.path.join(primer_dir,"tmp"))
-    filepath = os.path.join(os.path.join(tmp_dir,"tmp.fasta"))
+    filepath = os.path.join(tmp_dir,"tmp.fasta")
     with open(filepath,'wt') as f:
         for primer in primers:
             f.write(''.join(['>',primer,'\n',primer_dict[primer]["seq"],'\n']))
-    output = subprocess.check_output(''.join(["blastn -word_size ",str(word_size)," -max_target_seqs ",str(n)," -outfmt \"6 qseqid sseqid bitscore\" -query ",filepath," -subject ",filepath," -dust no"]),shell=True).decode("utf-8").rstrip().split('\n')
+    
+    #   align primers against themselves to get similarity score
+    if aligner == "bowtie2":
+        log_file = os.path.join(tmp_dir,"bowtie2_build.log")
+        indices_prefix = os.path.join(tmp_dir,"primer_pairs")
+        create_bowtie2_indices(log_file,filepath,indices_prefix)
+        out_file = os.path.join(tmp_dir,"mapped_primers.sam")
+        bowtie2_align(filepath,indices_prefix,out_file,report_all=True)
+    else:
+        out_file = os.path.join(tmp_dir,"mapped_primers.tsv")
+        blast_align(filepath,word_size,n,out_file)
+    
+    #   parse output
     warned = False
-    #   parse blastn output
-    for i,line in enumerate(output):
-        primer_A,primer_B,score = line.split()
-        score = float(score)
-        if not primer_A == primer_B and score > 0.0 and not warned:
-            print("Warning - two or more primers were found to be similar. Please review QC reports. ",end='',file=sys.stderr)
-            warned = True
-        #insert score into matrix
-        index_A,index_B = primers.index(primer_A),primers.index(primer_B)
-        matrix[index_A][index_B] = score
-        #   R-F and F-R primer pairs are symmetric within similarity matrix
-        if (primer_A.startswith('F') and primer_B.startswith('R')) or (primer_A.startswith('R') and primer_B.startswith('F')):
-            matrix[index_B][index_A] = score
+    end,step = (5,2) if aligner == "bowtie2" else (7,3)
+    with open(out_file,'rt') as f:
+        for line in f:
+            primer_A,primer_B,score = line.rstrip().split('\t')[0:end:step]
+            score = float(score)
+            if not primer_A == primer_B and score > 0.0 and not warned:
+                print("Warning - two or more primers were found to be similar. Please review QC reports. ",end='',file=sys.stderr,flush=True)
+                warned = True
+            #insert score into matrix
+            index_A,index_B = primers.index(primer_A),primers.index(primer_B)
+            matrix[index_A][index_B] = score
+            #   R-F and F-R primer pairs are symmetric within similarity matrix
+            if (primer_A.startswith('F') and primer_B.startswith('R')) or (primer_A.startswith('R') and primer_B.startswith('F')):
+                matrix[index_B][index_A] = score
     #   remove temporary directory
     shutil.rmtree(tmp_dir)
     #   write matrix to storage
     np.savetxt(os.path.join(primer_dir,"primer_similarities.matrix.tsv"),np.hstack((np.reshape(primers,(n,1)),matrix.astype(str))),fmt="%s",delimiter="\t",header="\t".join([""]+primers),comments='')
     
-    #   create heatmap of bitwise scores
-    plot_heatmap(os.path.join(primer_dir,"primer_similarities.heatmap.png"),np.log(matrix+1.0),primers)
+    #   create heatmap of scores
+    plot_heatmap(os.path.join(primer_dir,"primer_similarities.heatmap.png"),np.log(matrix+1.0),primers,cb_label="log(MAPQ)" if aligner == "bowtie2" else "log(bit score)")
     print("done",file=sys.stderr)
 
-    print("\tWriting paired-primer FASTA to storage ... ",end='',file=sys.stderr)
+    print_flush("\tWriting paired-primer FASTA to storage ... ")
     primers = fwd_primers+rvs_primers if len(barcodes) == 0 else [''.join([barcode,'-',primer]) for barcode in barcodes for primer in fwd_primers]+rvs_primers
     #   create FASTA of paired-primers including potential T3 and barcode sequences
-    with open(os.path.join(primer_dir,"primer_pairs.custom_db.fasta"),'wt') as o:
+    with open(os.path.join(primer_dir,"primer_pairs.fasta"),'wt') as o:
         for primer_A,primer_B in itertools.product(primers,repeat=2):
             #   split barcode from primer ID if present
             try: barcode_A,primer_A = primer_A.split('-')
@@ -144,7 +336,7 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
             o.write(''.join(['>',seq_A_id,'|',seq_B_id,'\n',seq_A,seq_B,'\n']))
     
     #   create FASTA of individual primers for 'unmappables'
-    with open(os.path.join(primer_dir,"short_read.custom_db.fasta"),'wt') as o:
+    with open(os.path.join(primer_dir,"short_seqs.fasta"),'wt') as o:
         for primer in primers:
             #   split barcode sequence from primer ID if present
             try: barcode_seq,primer = primer.split('-')
@@ -161,84 +353,21 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
     
     return min_fwd_length,min_rvs_length,primer_dict,fwd_primers+rvs_primers
     
-def parse_config(filepath):
-    """parses LAMP config file and returns user-defined parameters"""
-    file_dict = {}
-    barcode_seqs = set([])
-    min_barcode_length,norm_factor = None,None
-    with open(filepath,'rU' if python_2 else 'rt') as f:
-        #   format: dict[filepath][barcode] = {"label":,"omitted":,"norm_factor":}
-        #   one line per barcode, multiple lines per file if many barcodes sequenced together
-        for line in f:
-            #   potential columns - library,barcode_seq,filepath,omitted_primers,batch_num,TAQMAN_factor,dilution_factor,lysate_factor
-            line = line.rstrip().split('\t')
-            #   process config line values
-            library = line[0].replace(' ','_')
-            barcode_seq = '' if line[1] in [' ',''] else line[1]
-            if os.path.isfile(line[2]):
-                filepath = line[2]
-            else:
-                print(''.join(["Error - sequencing file '",line[2],"' does not exist"]))
-                sys.exit(-2)
-            try: omitted_primers = set([]) if line[3] in [' ',''] else set(line[3].replace('"','').split(','))
-            except IndexError: omitted_primers = set([])   #   no omitted primer column provided
-            try: batch_num = int(line[4])
-            except IndexError or ValueError: batch_num = None
-            norm_factor = np.prod([float(val) for val in line[5:]])
-            
-            #   handle barcode sequence if present
-            if barcode_seq != '':
-                barcode_seqs.add(barcode_seq)
-                barcode_length = len(barcode_seq)
-                min_barcode_length = barcode_length if min_barcode_length == None or barcode_length < min_barcode_length else min_barcode_length 
-            
-            try: 
-                file_dict[filepath][barcode_seq]
-                print("Warning - multiple declarations of a barcode for the same sequencing run found in config file",end='',file=sys.stderr)
-            except KeyError: 
-                try: file_dict[filepath][barcode_seq] = {"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}
-                except KeyError: file_dict[filepath] = {barcode_seq:{"label":library,"norm_factor":norm_factor,"omitted_primers":omitted_primers,"batch_num":batch_num}}
-    
-    return file_dict,barcode_seqs,(min_barcode_length if not min_barcode_length is None else 0)
+def map_ligated_products(file_dict,word_size):
+    """maps ligated paired-end reads using either Bowtie 2 or BLAST"""
+    primer_fasta = os.path.join(primer_dir,"primer_pairs.fasta")
+    out_prefix = os.path.join(aligner_dir,"primer_pairs")
+    if aligner == "bowtie2" and not (no_index_build and os.path.exists(''.join([out_prefix,".rev.2.bt2"]))):
+        print_flush("\tCreating ligated-products Bowtie 2 indicies ... ")
+        log_file = os.path.join(aligner_dir,"bowtie2_build.log")
+        create_bowtie2_indices(log_file,primer_fasta,out_prefix)
+        print("done",file=sys.stderr)
+    elif aligner == "blastn":
+        print_flush("\tBuilding ligated-products BLAST database ... ")
+        log_file = os.path.join(aligner_dir,"blast_makeblastdb.log")
+        create_blast_database(log_file,primer_fasta,out_prefix)
+        print("done",file=sys.stderr)
 
-def create_directory(directory):
-    """creates directory if it does not exist"""
-    if not os.path.exists(directory):
-        os.makedirs(directory)
-    
-    return directory
-
-def adjust_plot_parameters(ax,y_label=None,x_label=None,x_top=False):
-    """adjust common Matplotlib attributes"""
-    #   adjust axes ticks and labels
-    ax.tick_params(axis='x',which="both",bottom=False if x_top else True,top=True if x_top else False,direction="out",length=4,width=0.5,color='k')
-    if not x_label == None:
-        ax.set_xlabel(x_label)
-    ax.tick_params(axis='y',which="both",left=True,right=False,direction="out",length=4,width=0.5,color='k')
-    if not y_label == None:
-        ax.set_ylabel(y_label)
-    
-    #   adjust splines
-    for axis in ["bottom","left","right","top"] if x_top else ["bottom","left"]:   
-        ax.spines[axis].set_visible(True)
-        ax.spines[axis].set_color('k')
-        ax.spines[axis].set_linewidth(1.)
-    if x_top:
-        ax.xaxis.set_label_position("top") 
-        ax.xaxis.tick_top()
-        ax.set_aspect("equal")
-    else:
-        ax.spines["top"].set_visible(False)
-        ax.spines["right"].set_visible(False)
-    
-def BLAST_ligated_products(file_dict,word_size):
-    """maps ligated paired-end reads to BLASTdb"""
-    #   create custom BLAST database for ligated products
-    print("\tBuilding BLAST database ... ",end='',file=sys.stderr)
-    with open(''.join([blastdb_dir,"primer_pairs_makeblastdb.log"]),'wt') as o:
-        subprocess.check_call(["makeblastdb","-in",os.path.join(primer_dir,"primer_pairs.custom_db.fasta"),"-dbtype","nucl","-out",os.path.join(blastdb_dir,"primer_pairs.custom_db")],stdout=o,stderr=subprocess.STDOUT)
-    print("done",file=sys.stderr)
-     
     filepaths = []
     read_counts = [[],[]]  #[[total_reads1,total_reads2,...],[mapped_reads1,mapped_reads2,...]]
     keys = file_dict.keys() if python_2 else list(file_dict.keys())
@@ -247,71 +376,80 @@ def BLAST_ligated_products(file_dict,word_size):
         
         #   check if BAM format provided as input and convert to FASTQ
         if key.lower().endswith(".bam"):
-            print("\tConverting '"+basename+"' from BAM to FASTQ ... ",end='',file=sys.stderr)
-            output_filepath = os.path.join(mapping_dir,'.'.join([basename,"fastq"]))
+            print_flush("\tConverting '"+basename+"' from BAM to FASTQ ... ")
+            out_file = os.path.join(mapping_dir,'.'.join([basename,"fastq"]))
             with open(os.path.join(mapping_dir,'.'.join([basename,"BAMtoFASTQ.log"])),'wt') as o:
-                subprocess.check_call(''.join(["samtools bam2fq ",key," > ",output_filepath]),shell=True,stdout=o,stderr=subprocess.STDOUT)
+                subprocess.check_call(''.join(["samtools bam2fq ",key," > ",out_file]),shell=True,stdout=o,stderr=subprocess.STDOUT)
             #   update dictionary to point towards FASTQ
-            file_dict[output_filepath] = file_dict.pop(key)
-            key = output_filepath
+            file_dict[out_file] = file_dict.pop(key)
+            key = out_file
             print("done",file=sys.stderr)
             
-        print("\tConverting '"+basename+"' from FASTQ to FASTA ... ",end='',file=sys.stderr)
+        print_flush("\tConverting '"+basename+"' from FASTQ to FASTA ... ")
         #   convert fastq to fasta
-        output_filepath = os.path.join(mapping_dir,'.'.join([basename,"fasta"]))
+        out_file = os.path.join(mapping_dir,'.'.join([basename,"fasta"]))
         #   commands:
         #       1) extract sequence string from fastq file
         #       2) exclude sequences <min(primer_junction) in length
         #       3) sort and count unique sequences
         #       4) output in fasta format
         with open(os.devnull,'wb') as devnull:
-            subprocess.check_call(''.join([sed_cmd," -n '2~4p' ",key," | awk 'length($0)>=",word_size,"' | sort | uniq -c | awk 'BEGIN{SUM=0}{SUM+=1; print \">ID_\"SUM\"_FREQ_\"$1 \"\\n\" $2}' > ",output_filepath]),shell=True,stdout=devnull)
+            subprocess.check_call(''.join([sed_cmd," -n '2~4p' ",key," | awk 'length($0)>=",word_size,"' | sort | uniq -c | awk 'BEGIN{SUM=0}{SUM+=1; print \">ID_\"SUM\"_FREQ_\"$1 \"\\n\" $2}' > ",out_file]),shell=True,stdout=devnull)
 
         #   calculate total number of reads to be mapped
         filepaths.append(key)
-        read_counts[0].append(int(subprocess.check_output(''.join([sed_cmd," -n '1~2p' ",output_filepath," | awk -F '_' 'BEGIN{sum=0}{sum+=$NF}END{print sum}'"]),shell=True).rstrip()))
+        read_counts[0].append(int(subprocess.check_output(''.join([sed_cmd," -n '1~2p' ",out_file," | awk -F '_' 'BEGIN{sum=0}{sum+=$NF}END{print sum}'"]),shell=True).rstrip()))
         print("done",file=sys.stderr)
         
-        print(''.join(["\tBLAST-ing '",basename,"' ... "]),end='',file=sys.stderr)
-        #   blast sample queries against database
-        query_filepath = output_filepath
-        output_filepath = output_filepath.replace(".fasta",".BLAST.tsv")
-        BLAST_process = subprocess.Popen(["blastn","-db",os.path.join(blastdb_dir,"primer_pairs.custom_db"),"-word_size",word_size,"-dust","no","-max_target_seqs","1","-num_threads",str(num_threads),"-outfmt",r"6 qseqid qstart qseq sseqid sstart sseq bitscore","-query",query_filepath,"-out",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-        with open(output_filepath.replace("tsv","log"),'wt') as o:
-            o.write(BLAST_process.communicate()[0].decode("utf-8"))
-        read_counts[1].append(int(subprocess.check_output(''.join(["awk -F \"\\t\" '{print $1}' ",output_filepath," | sort | uniq | awk -F \"_\" 'BEGIN{sum=0}{sum+=$4}END{print sum}' "]),shell=True).rstrip()))
+        print_flush(''.join(["\tMapping '",basename,"' ... "]))
+        query_file = out_file
+        out_file = out_file.replace(".fasta",".mapped.sam") if aligner == "bowtie2" else out_file.replace(".fasta",".mapped.tsv")
+        if aligner == "bowtie2": 
+            pass
+            #bowtie2_align(query_file,out_prefix,out_file)
+        else:
+            blast_align(query_file,word_size,1,out_file,db_path=out_prefix)
+        #   track mapped reads    
+        cmd = ["awk '$1 ~ /^ID_/ {print $1}' ",out_file] if aligner == "bowtie2" else ["awk -F \"\\t\" '{print $1}' ",out_file]
+        read_counts[1].append(int(subprocess.check_output(''.join(cmd+[" | sort | uniq | awk -F \"_\" 'BEGIN{sum=0}{sum+=$4}END{print sum}' "]),shell=True).rstrip()))
         print("done",file=sys.stderr)
 
     #   write mapped and unmapped read counts to file
-    with open(os.path.join(mapping_dir,''.join(["BLAST_summary.word_size_",word_size,".tsv"])),'wt') as o:
+    with open(os.path.join(mapping_dir,''.join(["mapping_summary",".tsv"])),'wt') as o:
         o.write('\t'.join(["filepath","total_reads","mapped_reads"])+'\n')
         for i,(mapped,unmapped) in enumerate(zip(*read_counts)):
             assert(unmapped < mapped),''.join(["Error - more reads were mapped than sequenced for library '",filepaths[i],"'"])
             o.write('\t'.join([filepaths[i],str(mapped),str(unmapped)])+'\n')
 
-    print("\tPlotting summary ... ",end='',file=sys.stderr)
+    print_flush("\tPlotting summary ... ")
     for i,key in enumerate(filepaths):
-        output_filepath = os.path.join(mapping_dir,os.path.basename(key).replace(".fastq",".BLAST_summary.bar_plot.png"))
-        plot_bar(output_filepath,[read_counts[0][i],read_counts[1][i]],["Total","Mapped"],['b','r'])
+        out_file = os.path.join(mapping_dir,os.path.basename(key).replace(".fastq",".mapping_summary.bar_plot.png"))
+        plot_bar(out_file,[read_counts[0][i],read_counts[1][i]],["Total","Mapped"],['b','r'])
     print("done",file=sys.stderr)
 
-def BLAST_short_reads(dictionary,word_size):
-    """maps 'unmappables' to short-read BLASTdb"""
-    print("\tBuilding short-read BLASTdb ... ",end='',file=sys.stderr)
-    with open(os.path.join(blastdb_dir,"short_read.makeblastdb.log"),'wt') as o:
-        subprocess.check_call(["makeblastdb","-in",os.path.join(primer_dir,"short_read.custom_db.fasta"),"-dbtype","nucl","-out",os.path.join(blastdb_dir,"short_read.custom_db")],stdout=o,stderr=subprocess.STDOUT)
-    print("done",file=sys.stderr)
-    
+def map_short_reads(dictionary,word_size):
+    """maps 'unmappables' to expected short-reads"""
+    primer_fasta = os.path.join(primer_dir,"short_seqs.fasta")
+    out_prefix = os.path.join(aligner_dir,"short_seqs")
+    if aligner == "bowtie2"  and not (no_index_build and os.path.exists(''.join([out_prefix,".rev.2.bt2"]))):
+        print_flush("\tCreating short-read Bowtie 2 indicies ... ")
+        log_file = os.path.join(aligner_dir,"bowtie2_build.log")
+        create_bowtie2_indices(log_file,primer_fasta,out_prefix)
+        print("done",file=sys.stderr)
+    elif aligner == "blastn":
+        print_flush("\tBuilding short-read BLAST database ... ")
+        log_file = os.path.join(aligner_dir,"blast_makeblastdb.log")
+        create_blast_database(log_file,primer_fasta,out_prefix)
+        print("done",file=sys.stderr)
+
     total_dict = {}
     label_dict = {'u':"Unknown",'F':"FWD",'R':"RVS",'B':"BC+FWD"}
     color_dict={"Total":'k',"Unknown":"grey","FWD":'b',"RVS":'r',"BC+FWD":'w'}
     for key in dictionary.keys():
-        #if not "15Min_Set1" in key:
-        #    continue
         count_dict = {}
         basename = '.'.join(os.path.basename(key).split('.')[:-1])
-        print(''.join(["\tProcessing '",basename,"' reads ... "]),end='',file=sys.stderr)
-        filepath = os.path.join(mapping_dir,'.'.join([basename,"BLAST.tsv"]))
+        print_flush(''.join(["\tProcessing '",basename,"' reads ... "]))
+        filepath = os.path.join(mapping_dir,'.'.join([basename,"mapped.sam"] if aligner == "bowtie2" else [basename,"mapped.tsv"]))
         
         #   get mapped IDs
         mapped_ids = set(subprocess.check_output(''.join(["awk -F '\\t' '{print $1}' ",filepath]),shell=True).decode("utf-8").rstrip().split())
@@ -320,10 +458,10 @@ def BLAST_short_reads(dictionary,word_size):
         #   parse out 'unmappables'
         unmapped_seq_dict = {}
         total_unmapped,total = 0,0
-        input_filepath = os.path.join(mapping_dir,'.'.join([basename,"fasta"]))
-        output_filepath = os.path.join(short_read_dir,'.'.join([basename,"unmapped_reads.fasta"]))
-        with open(output_filepath,'wt') as o:
-            with open(input_filepath,'rt') as f:
+        in_file = os.path.join(mapping_dir,'.'.join([basename,"fasta"]))
+        out_file = os.path.join(short_read_dir,'.'.join([basename,"unmapped_reads.fasta"]))
+        with open(out_file,'wt') as o:
+            with open(in_file,'rt') as f:
                 seq_id = f.readline().rstrip()
                 seq = f.readline().rstrip()
                 while seq_id and seq:
@@ -341,32 +479,33 @@ def BLAST_short_reads(dictionary,word_size):
                     seq = f.readline().rstrip()
         assert(total_mapped+total_unmapped == total),"Error - mapped and umapped read counts do not sum to the total number of reads"
         print("done",file=sys.stderr)
+
+        #   map 'unmappables' against  expected short sequences
+        print_flush(''.join(["\tMapping '",basename,"' short reads ... "]))
+        query_file = out_file
+        out_file = out_file.replace(".unmapped_reads.fasta",".short_reads.mapped.sam") if aligner == "bowtie2" else out_file.replace(".unmapped_reads.fasta",".short_reads.mapped.tsv")
+        if aligner == "bowtie2": 
+            bowtie2_align(query_file,out_prefix,out_file,local=True)
+        else:
+            blast_align(query_file,word_size,1,out_file,db_path=out_prefix,hsps=True)
         
-        #   BLAST 'unmappables' against  short-read BLASTdb
-        print(''.join(["\tBLAST-ing '",basename,"' short reads ... "]),end='',file=sys.stderr)
-        query_filepath = output_filepath
-        output_filepath = output_filepath.replace(".unmapped_reads.fasta",".short_reads.BLAST.tsv")
-        BLAST_process = subprocess.Popen(["blastn","-db",os.path.join(blastdb_dir,"short_read.custom_db"),"-word_size",word_size,"-dust","no","-max_target_seqs",'1',"-max_hsps",'1',"-num_threads",num_threads,"-outfmt",r"6 qseqid qstart qseq sseqid sstart sseq bitscore","-query",query_filepath,"-out",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
-        with open(output_filepath.replace("tsv","log"),'wt') as o:
-            o.write(BLAST_process.communicate()[0].decode("utf-8"))
-        
-        #   reformat BLAST output
-        input_filepath = output_filepath
-        output_filepath = input_filepath.replace(".short_reads.BLAST.tsv",".short_reads_summary.tsv")
-        with open(output_filepath,'wt') as o:
+        #   reformat output
+        in_file = out_file
+        out_file = in_file.replace(".short_reads.mapped.",".short_reads_summary.").replace(".sam",".tsv")
+        with open(out_file,'wt') as o:
             #   write header
             o.write('\t'.join(["seq_id","freq","seq","possible_primer"])+'\n')
-        with open(output_filepath,'at') as o:
-            subprocess.Popen(["awk","-F","\\t|_","{OFS=\"\\t\"; print $1\"_\"$2,$4,$6,$7}",input_filepath],stdout=o,stderr=subprocess.STDOUT).communicate()
+        with open(out_file,'at') as o:
+            fields = "{OFS=\"\\t\"; print $1\"_\"$2,$4,$13,$6}" if aligner == "bowtie2" else "{OFS=\"\\t\"; print $1\"_\"$2,$4,$6,$7}"
+            subprocess.Popen(["awk","-F","\\t|_",fields,in_file],stdout=o,stderr=subprocess.STDOUT).communicate()
         #   add unmapped sequences to output
-        mapped_short_reads = subprocess.check_output(''.join(["awk -F '\\t' 'NR>1{print $1}' ",output_filepath]),shell=True).decode("utf-8").rstrip().split()
+        mapped_short_reads = subprocess.check_output(''.join(["awk -F '\\t' 'NR>1{print $1}' ",out_file]),shell=True).decode("utf-8").rstrip().split()
         assert(len(mapped_short_reads) == len(set(mapped_short_reads))),"Error - multimapping encountered in short reads library"
-        with open(output_filepath,'at') as o:
+        with open(out_file,'at') as o:
             for seq_id in set(unmapped_seq_dict.keys())-set(mapped_short_reads):
                 o.write('\t'.join([seq_id]+unmapped_seq_dict[seq_id]+["unknown"])+'\n')
-
         #   store summary of sample in memory
-        process_1 = subprocess.Popen(["awk","-F","\\t","NR>1 {print $2,$4}",output_filepath],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        process_1 = subprocess.Popen(["awk","-F","\\t","NR>1 {print $2,$4}",out_file],stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         process_2 = subprocess.Popen(["awk","{a[substr($2,1,1)]+=$1}END{for(i in a) print i,a[i]}"],stdin=process_1.stdout,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
         output = process_2.communicate()[0].decode("utf-8").rstrip().split('\n')
         for i,val in enumerate(output):
@@ -380,56 +519,18 @@ def BLAST_short_reads(dictionary,word_size):
         for label in labels:
             heights.append(sum(count_dict.values()) if label == "Total" else count_dict[label])
             colors.append(color_dict[label])
-        plot_bar(output_filepath.replace(".tsv",".bar_plot.png"),heights,labels,colors,title="Short-reads summary")
+        plot_bar(out_file.replace(".tsv",".bar_plot.png"),heights,labels,colors,title="Short-reads summary")
         total_dict[key] = sum(count_dict.values())
         assert(total_dict[key] == total_unmapped),"Error - short reads do not sum to expected count"
         print("done",file=sys.stderr)
         
     return total_dict
 
-def plot_heatmap(output_filepath,matrix,labels):
-    """creates heatmap of matrix via MatPlotlib"""
-    n = len(labels)
-    labels = [val.split('@')[1] for i,val in enumerate(labels)]
-    #   create heatmap of bitwise scores
-    fig,ax = plt.subplots(figsize=(8,8),facecolor='w')
-    im = ax.imshow(matrix,cmap="gist_heat_r",interpolation="none")
-    ax.grid(False)
-    cb = plt.colorbar(im,fraction=0.046,pad=0.04)
-    cb.outline.set_visible(False)
-    cb.ax.tick_params(axis='y', direction='out')
-    #create ticks
-    tick_labels,tick_positions = [],[]
-    for i in get_range(0,n,n//10):
-        tick_positions.append(i)
-        tick_labels.append(labels[i])
-    plt.xticks(tick_positions,tick_labels,rotation=-45,ha="right")
-    plt.yticks([val for val in tick_positions],tick_labels)
-    adjust_plot_parameters(ax,x_top=True)
-    plt.tight_layout()
-    plt.savefig(output_filepath,format="png",transparent=False,dpi=300.0)
-    plt.close()
-
-def plot_bar(output_filepath,y_vals,labels,colors,title="BLAST results of libraries"):
-    """creates bar plot of provided heights via MatPlotlib"""
-    if len(y_vals) == 2:
-        title = title.replace("libraries","library")
-    fig,ax = plt.subplots(figsize=(8,8))
-    ax.set_title(title,fontweight="bold")
-    x_ticks = []
-    for i,(height,color) in enumerate(zip(y_vals,colors)):
-        ax.bar(i,height,1.,color=color,edgecolor='k')
-        x_ticks.append(i+0.5)
-    ax.grid(False)
-    ax.set_xlim([-1,6])
-    ax.set_xticks(x_ticks)
-    ax.set_xticklabels(labels,rotation=40,ha="right")
-    adjust_plot_parameters(ax,y_label="Read count frequency")
-    plt.savefig(output_filepath,format="png",transparent=True,dpi=300.0, bbox_inches="tight")
-    plt.close()
-
 def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,data_type="2C-ChIP"):
     """process mapped reads and outputs them in user-friendly format"""
+    # create subdirectory of results folder
+    matrix_dir = create_directory(os.path.join(results_dir,"interaction_matrices"))
+    
     n = len(sorted_primers)
     #   build matrix loci row/column labels
     loci = []
@@ -450,29 +551,34 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
     
     expected_barcodes = [''.join([key,barcode]) for key in file_dict.keys() for barcode in file_dict[key].keys()]
     tensor = np.zeros((len(expected_barcodes),n,n),dtype=np.int32)
+    suffix = "mapped.sam" if aligner == "bowtie2" else "mapped.tsv"
     with open(os.path.join(mapping_dir,"read_count_frequency_table.tsv"),'wt') as o:
         o.write('\t'.join(["filepath","total_reads"]+(["on_diagonal","off_diagonal"] if data_type == "2C-ChIP" else ["expected","unexpected"])+["short_reads"])+'\n')
         for key in file_dict.keys():
             total = 0
             cur_barcodes = set([])
             basename = '.'.join(os.path.basename(key).split('.')[:-1])
-            print(''.join(["\tParsing '",basename,"' mapped reads ... "]),end='',file=sys.stderr)
-            filepath = os.path.join(mapping_dir,'.'.join([basename,"BLAST.tsv"]))
+            print_flush(''.join(["\tParsing '",basename,"' mapped reads ... "]))
+            filepath = os.path.join(mapping_dir,'.'.join([basename,suffix]))
             
             #   check for multi-mappings
             multimap_dict = {}
+            indices = [0,2] if aligner == "bowtie2" else [0,3]
             output = subprocess.check_output(''.join(["awk -F '\t' '{a[$1]++}END{for(i in a){if(a[i] > 1){print i}}}' ",filepath,"  | xargs -I {} grep {} ",filepath]),shell=True).decode("utf-8").rstrip()
             for line in output.split('\n'):
-                try: query_id,query_start,query_seq,subject_id,subject_start,subject_seq,bitscore = line.split()
-                except ValueError: continue #   no multi-mappings in library
+                line = line.rstrip().split('\t')
+                try: query_id,subject_id = [line[i] for i in indices]
+                except: continue    #   no multi-mappings, skip file that contains only new line
                 try: multimap_dict[query_id].add(subject_id)
                 except KeyError: multimap_dict[query_id] = set([subject_id])
 
             single_primer_count=[0,0]
+            indices = [0,9,2,3] if aligner == "bowtie2" else [0,2,3,4]
             invalid_barcode,omitted,multimaps,total,off_diagonal,on_diagonal,expected,unexpected = 0,0,0,0,0,0,0,0
             with open(filepath,'rt') as f:
                 for line in f:
-                    query_id,query_start,query_seq,subject_id,subject_start,subject_seq,bitscore = line.rstrip().split()
+                    line = line.rstrip().split()
+                    query_id,query_seq,subject_id,subject_start = [line[i] for i in indices]
                     freq = int(query_id.split('_')[-1])
                     
                     #   check for multi-mappings
@@ -497,8 +603,8 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
                     #   validate barcodes
                     if (barcode_A == '' and len(expected_barcodes) == 0) or (full_barcode in expected_barcodes):
                         #   skip omitted libraries where all primers are ommitted (still expect mappings for 2C-ChIP products)
-                        subject_start = int(subject_start)
-                        #ensure mapped sequences map to both primers with at least one nucleotide coverage
+                        subject_start = int(subject_start)-1 if aligner == "bowtie2" else int(subject_start)
+                        #   ensure mapped sequences map to both primers with at least one nucleotide coverage
                         #   1)  mapped query doesn't start on downstream primer
                         #   2)  query that maps to upstream primer covers downstream primer
                         if ((len(barcode_A)+len(primer_dict[primer_A]["seq"])) > subject_start) and ((subject_start+len(query_seq)) > len(primer_dict[primer_A]["seq"])):   
@@ -528,21 +634,26 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
             for barcode in cur_barcodes:
                 #   write raw matrix of frequency counts to storage
                 i = expected_barcodes.index(barcode)
-                output_filepath = os.path.join(results_dir,'.'.join([file_dict[key][barcode.split(".fastq")[-1]]["label"],"raw.matrix"]))
-                np.savetxt(output_filepath,np.hstack((np.reshape(loci,(n,1)),tensor[i].astype(str))),
+                out_file = os.path.join(matrix_dir,'.'.join([file_dict[key][barcode.split(".fastq")[-1]]["label"],"raw.matrix"]))
+                np.savetxt(out_file,np.hstack((np.reshape(loci,(n,1)),tensor[i].astype(str))),
                            fmt='%s',delimiter='\t',header='\t'.join(['']+loci),comments='')
                 #   plot heatmap of log(values) in matrix
-                plot_heatmap(output_filepath.replace('raw.matrix','log_raw.heatmap.png'),np.log(tensor[i]+1.0),sorted_primers)
+                plot_heatmap(out_file.replace('raw.matrix','log_raw.heatmap.png'),np.log(tensor[i]+1.0),sorted_primers,cb_label="log(Frequency)")
             vals = [total+short_read_dict[key],expected,sum([unexpected,omitted,multimaps,invalid_barcode,sum(single_primer_count)]),short_read_dict[key]] if data_type == "5C" else [total+short_read_dict[key],on_diagonal,sum([off_diagonal,multimaps,omitted,invalid_barcode,sum(single_primer_count)]),short_read_dict[key]]
             o.write('\t'.join([key]+[str(val) for val in vals])+'\n')
             assert(vals[0] == sum(vals[1:])),''.join(["Error - '",key,"' LP-mapped reads do not sum to total"])
             #   plot bar of total counts
-            output_filepath = os.path.join(mapping_dir,'.'.join([basename,"read_count.bar_plot.png"]))
-            plot_bar(output_filepath,vals,["Total","Expected","Unexpected","Short reads"] if data_type == "5C" else ["Total","On-diagonal","Off-diagonal","Short reads"],['k','b','r','grey'])
+            out_file = os.path.join(mapping_dir,'.'.join([basename,"read_count.bar_plot.png"]))
+            plot_bar(out_file,vals,["Total","Expected","Unexpected","Short reads"] if data_type == "5C" else ["Total","On-diagonal","Off-diagonal","Short reads"],['k','b','r','grey'])
             print("done",file=sys.stderr)
 
     if data_type == "2C-ChIP":
-        print("\tNormalizing data ... ",end='',file=sys.stderr)
+        bed_dir = os.path.dirname(create_directory(os.path.join(results_dir,"bedGraphs","raw")))
+        create_directory(os.path.join(results_dir,"bedGraphs","norm"))
+        line_dir = os.path.dirname(create_directory(os.path.join(results_dir,"line_plots","RPM")))
+        create_directory(os.path.join(results_dir,"line_plots","norm"))
+        
+        print_flush("\tNormalizing data ... ")
         #   determine track batches to be normalized be respective input
         batch_dict = {} #   {number: {"labels":[],"indices":[],"omitted_primers":[],"input":True/False}}
         for key in file_dict.keys():
@@ -577,7 +688,7 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
         for key in batch_dict.keys():
             #   warn user if no input track present for batch
             if not batch_dict[key]["input"]:
-                print(''.join(["Warning - There was no 'input' track found for batch #",str(key)]),file=sys.stderr)
+                print_flush(''.join(["Warning - There was no 'input' track found for batch #",str(key)]))
             
             #   iterate over batch tracks and normalize on-diagonals targets
             data_dict = {}
@@ -624,8 +735,8 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
                 label = file_dict[filepath][barcode]["label"]
                 #   write bedGraph files - need to iterate again to get proper 'max_val' in previous loop
                 for max_val,data_type in zip([raw_max_val,norm_max_val],["raw","norm"]):
-                    output_filepath = os.path.join(results_dir,'.'.join([label,data_type,"bedGraph"]))
-                    with open(output_filepath,'wt') as o:
+                    out_file = os.path.join(bed_dir,data_type,'.'.join([label,data_type,"bedGraph"]))
+                    with open(out_file,'wt') as o:
                         #   write header
                         o.write('\n'.join([''.join(["browser position ",region]),"browser hide all","browser pack refGene encodeRegions",''.join(["track type=bedGraph name=\"",label,"\" color=0,0,0 visibility=full priority=20 maxHeightPixels=60 autoScale=off viewLimits=0:",str(max_val)]),'']))
                         for i,(loci,freq) in enumerate(zip(bedGraph_loci,data_dict[label][data_type])):
@@ -635,7 +746,7 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
                 #   plot line graphs of primer performance
                 for data_type in ["RPM","norm"]:
                     fig,ax = plt.subplots(figsize=(8,8),facecolor='w')
-                    output_filepath = os.path.join(results_dir,'.'.join([label,data_type,"line_plot.png"]))
+                    out_file = os.path.join(line_dir,data_type,'.'.join([label,data_type,"line_plot.png"]))
                     ax.plot(x_vals,data_dict[label][data_type],label=data_type,color='k' if data_type == "RPM" else 'r')
                     #   set x-ticks
                     xticks = get_range(0,n,10)
@@ -645,12 +756,12 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
                     adjust_plot_parameters(ax,y_label="Raw frequency (in RPM)" if data_type == "RPM" else "Normalized frequency",x_label="Primer pair")
                     ax.margins(0.025)
                     plt.tight_layout()
-                    plt.savefig(output_filepath.replace(".tsv",".scatter.png"),format="png",transparent=False,dpi=300.0)
+                    plt.savefig(out_file.replace(".tsv",".scatter.png"),format="png",transparent=False,dpi=300.0)
                     plt.close()
         
         #   create summary of F-R raw frequencies vs. norm-factor
-        output_filepath = os.path.join(results_dir,"raw_totals_vs_norm_factor.tsv")
-        with open(output_filepath,'wt') as f:
+        out_file = os.path.join(results_dir,"raw_totals_vs_norm_factor.tsv")
+        with open(out_file,'wt') as f:
             f.write('\t'.join(["library","total_raw_reads","norm_factor"])+'\n')
             for (label,total,norm_val) in raw_totals:
                 f.write('\t'.join([label,str(total),str(norm_val)])+'\n')
@@ -662,38 +773,59 @@ def process_mapped_reads(file_dict,primer_dict,sorted_primers,short_read_dict,da
         rho,p_value = spearmanr(x_vals,y_vals)
         ax.set_title(''.join([r'$\rho_{S}$ = ',"{0:.2f} ({1:.2E})".format(rho,p_value)]),fontsize=12)
         ax.grid(None)
-        ax.set_ylim([1.0,np.power(10,math.ceil(np.log10(val)))])
+        ax.set_ylim([1.0,np.power(10,np.ceil(np.log10(val)))])
         ax.set_yscale("log",nonposy="clip")
         ax.grid(color="gray",ls=':',lw=0.5)
         adjust_plot_parameters(ax,y_label="Normalization factor",x_label="Total reads")
         plt.tight_layout()
-        plt.savefig(output_filepath.replace(".tsv",".scatter.png"),format="png",transparent=False,dpi=300.0)
+        plt.savefig(out_file.replace(".tsv",".scatter.png"),format="png",transparent=False,dpi=300.0)
         plt.close()
         print("done",file=sys.stderr)
-        
+    
+#   check if a tested read aligner is available
+aligner = "bowtie2"
+exe = os_which(aligner)
+if exe is None:
+    print("Warning - Bowtie 2 executable cannot be found in the 'PATH' environment variable")
+    aligner = "blastn"
+    exe = os_which(aligner)
+    if exe is None:
+        print("Error - BLAST executable cannot be found in the 'PATH' environment variable")
+        sys.exit(-2)
+    else: 
+        print(' '.join(["Using BLAST executable found in 'PATH' environment variable:",exe]))
+else: 
+    print(' '.join(["Using Bowtie 2 executable found in 'PATH' environment variable:",exe]))
+del exe
+
+#   check if samtools can be found in the 'PATH' variable for BAM->FASTQ conversion
+if os_which("samtools") is None:
+    print("Warning - SAMtools cannot be found in the 'PATH' environment variable. BAM input will lead to errors")
+    
 parser = argparse.ArgumentParser()
 parser.add_argument("config", help = "path to LAMPS config file", type = str)
 parser.add_argument("primers", help = "path to TSV file containing primer information", type = str)
 parser.add_argument("type", help = "source of paired-end reads:[2C-ChIP,5C]")
 parser.add_argument("output", help = "path to output folder", type = str)
 parser.add_argument("--num_cpus", help = "set the number of cpus - default = num_cpus-2", type = str)
-parser.add_argument("--word_size", help = "set the minimum required sequence length for processing", type = int)
+parser.add_argument("--word_size", help = "set the minimum required sequence length for processing (BLAST)", type = int)
+parser.add_argument("--no_index_build", help = "don't re-build Bowtie 2 indices if present", action = "store_true")
 args = parser.parse_args()
 
 assert(args.type in ["2C-ChIP","5C"]),"Error - invalid type provided. Please specify either '2C-ChIP' or '5C'"
 
+short_read_dict = None
 num_threads = str(multiprocessing.cpu_count()-2) if args.num_cpus == None else str(args.num_cpus)
+no_index_build = args.no_index_build
 
 args.output = create_directory(args.output)
 primer_dir = create_directory(os.path.join(args.output,"primer_files",''))
 mapping_dir = create_directory(os.path.join(args.output,"mapping_files",''))
-blastdb_dir = create_directory(os.path.join(mapping_dir,"BLAST",''))
+aligner_dir = create_directory(os.path.join(mapping_dir,''.join([aligner,"_files"]),''))
 short_read_dir = create_directory(os.path.join(mapping_dir,"short_read_analysis",''))
 results_dir = create_directory(os.path.join(args.output,"results",''))
 
-short_read_dict = None
-
-print("Parsing LAMPS config file ... ",end='',file=sys.stderr)
+print_flush("Parsing LAMPS config file ... ")
 #   parse config file
 file_dict,barcode_seqs,min_barcode_length = parse_config(args.config)
 print("done",file=sys.stderr)
@@ -702,18 +834,18 @@ print("done",file=sys.stderr)
 print("Parsing primer file")
 min_fwd_length,min_rvs_length,primer_dict,sorted_primers = build_FASTAs(args.primers,file_dict,barcode_seqs)
 
-#   map paired-end reads to ligated product BLASTdb
-print("Mapping to ligated-product BLASTdb")
+#   map paired-end reads to expected ligation products
+print("Mapping to expected ligated-products")
 word_size = args.word_size if not args.word_size == None else str(min((min_barcode_length+min_fwd_length)*2,
                     min_barcode_length+min_fwd_length+min_rvs_length,
                     min_rvs_length+min_rvs_length))
-BLAST_ligated_products(file_dict,word_size)
+map_ligated_products(file_dict,word_size)
 
-#   map too short or unmappable pair-end reads to short-read BLASTdb
-print("Mapping to short-read BLASTdb")
+#   map too short or unmappable pair-end reads to expected short sequences
+print("Mapping to expected short-reads")
 #   first case is unecessary, only present for completeness
 word_size = str(min(min_barcode_length+min_fwd_length,min_fwd_length,min_rvs_length))
-short_read_dict = BLAST_short_reads(file_dict,word_size)
+short_read_dict = map_short_reads(file_dict,word_size)
 
 #   process mapped reads
 print("Processing mapped reads")
