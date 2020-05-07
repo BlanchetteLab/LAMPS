@@ -405,8 +405,7 @@ def map_ligated_products(file_dict,word_size):
         query_file = out_file
         out_file = out_file.replace(".fasta",".mapped.sam") if aligner == "bowtie2" else out_file.replace(".fasta",".mapped.tsv")
         if aligner == "bowtie2": 
-            pass
-            #bowtie2_align(query_file,out_prefix,out_file)
+            bowtie2_align(query_file,out_prefix,out_file)
         else:
             blast_align(query_file,word_size,1,out_file,db_path=out_prefix)
         #   track mapped reads    
