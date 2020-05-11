@@ -45,9 +45,9 @@ LAMPS config file - human-readable text file (tab-separated values [TSV] format)
 5) *optional*: batch number - user-assigned batch id that groups libraries with respective input library for normalization
 6) *optional*: normalization factors - one or more normalization factors found in their own additional columns (i.e., if there are three normalization factors, then there will be 8 columns present in the config file). LAMPS will multiply factors together.
 
-&nbsp;&nbsp;&nbsp;&nbsp;*Columns 5-8 are used when normalizing 2C-ChIP libraries and not typically applied to 5C data
+&nbsp;&nbsp;&nbsp;&nbsp;*Columns 5-8 are used when normalizing 2C-ChIP libraries and not applied to 5C data
 
-&nbsp;&nbsp;&nbsp;&nbsp;*Example config files can be found in the example 2C-ChIP and 5C folders
+&nbsp;&nbsp;&nbsp;&nbsp;*Example and template config files for 2C-ChIP and 5C data can be found in the config_example/ folder as well as in the example  datasets
 
 Primer file - human-readable text file (TSV format) with eight required columns:
 1) *required*: genome locus name
@@ -59,7 +59,7 @@ Primer file - human-readable text file (TSV format) with eight required columns:
 7) *required*: primer starting basepair
 8) *required*: primer ending basepair
 
-&nbsp;&nbsp;&nbsp;&nbsp;*Example primer files can be found in the example 2C-ChIP and 5C folders
+&nbsp;&nbsp;&nbsp;&nbsp;*Example primer files for 2C-ChIP and 5C data can be found in the example datasets
 
 ## Output
 
