@@ -2,7 +2,7 @@
 Sequence analysis pipeline for 2C-ChIP and 5C products
 
 ## Overview
-The 'Ligation-mediated Amplified, Multiplexed Paired-end Sequence' or LAMPS is is a Linux/MacOS command line interface for analyzing paired-end sequences, which may or may not be multiplexed.
+The 'Ligation-mediated Amplified, Multiplexed Primer-pair Sequence' or LAMPS is is a Linux/MacOS command line interface for analyzing Ligation-Mediated Amplification (LMA) sequences, which may or may not be multiplexed.
 
 ## Software requirements
 1) Python (v2.7.15 or v3.8.1 tested): https://conda.io/docs/user-guide/install/download.html (recommended)
@@ -38,7 +38,7 @@ Process 5C sequencing data:
 
 ## Input
 LAMPS config file - human-readable text file (tab-separated values [TSV] format) with three required and 5 optional columns:
-1) *required*: paired-end library name
+1) *required*: LMA library name
 2) *required*: barcode sequence for multiplexing - if no barcode, provide an empty string
 3) *required*: complete file path to sequencing file (FASTQ or BAM)
 4) *optional*: primers to exclude - comma separated list of primer names found in the second column of the primer file (**must be identical**)
@@ -106,7 +106,7 @@ LAMPS.py [-h] [--num_cpus NUM_CPUS] config primers type output
 positional arguments:
   config			file path to LAMPS config file
   primers			file path to TSV file containing primer information
-  type				source of paired-end reads:[2C-ChIP,5C]
+  type				source of LMA reads:[2C-ChIP,5C]
   output			file path to output folder	
 
 optional arguments:
