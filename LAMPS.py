@@ -2,7 +2,7 @@
 #
 #   LAMPS - 2C-ChIP and 5C library processing (Python v2 or v3)
 #   Steps:
-#       1) maps paired-end sequences to defined regions
+#       1) maps Ligation-Mediated Amplification (LMA) sequences to defined regions
 #       2) provides barcode/primer Quality Checks (QC)
 #       3) outputs processed data in standardized format: bedGraph (2C-ChIP) and my5C matrix (5C)
 #   See README for more information: https://github.com/BlanchetteLab/LAMPS
@@ -354,7 +354,7 @@ def build_FASTAs(filepath,file_dict,barcodes=None):
     return min_fwd_length,min_rvs_length,primer_dict,fwd_primers+rvs_primers
     
 def map_ligated_products(file_dict,word_size):
-    """maps ligated paired-end reads using either Bowtie 2 or BLAST"""
+    """maps ligated reads using either Bowtie 2 or BLAST"""
     primer_fasta = os.path.join(primer_dir,"primer_pairs.fasta")
     out_prefix = os.path.join(aligner_dir,"primer_pairs")
     if aligner == "bowtie2" and not (no_index_build and os.path.exists(''.join([out_prefix,".rev.2.bt2"]))):
@@ -804,7 +804,7 @@ if os_which("samtools") is None:
 parser = argparse.ArgumentParser()
 parser.add_argument("config", help = "path to LAMPS config file", type = str)
 parser.add_argument("primers", help = "path to TSV file containing primer information", type = str)
-parser.add_argument("type", help = "source of paired-end reads:[2C-ChIP,5C]")
+parser.add_argument("type", help = "source of LMA reads:[2C-ChIP,5C]")
 parser.add_argument("output", help = "path to output folder", type = str)
 parser.add_argument("--num_cpus", help = "set the number of cpus - default = num_cpus-2", type = str)
 parser.add_argument("--word_size", help = "set the minimum required sequence length for processing (BLAST)", type = int)
@@ -833,14 +833,14 @@ print("done",file=sys.stderr)
 print("Parsing primer file")
 min_fwd_length,min_rvs_length,primer_dict,sorted_primers = build_FASTAs(args.primers,file_dict,barcode_seqs)
 
-#   map paired-end reads to expected ligation products
+#   map reads to expected ligation products
 print("Mapping to expected ligated-products")
 word_size = args.word_size if not args.word_size == None else str(min((min_barcode_length+min_fwd_length)*2,
                     min_barcode_length+min_fwd_length+min_rvs_length,
                     min_rvs_length+min_rvs_length))
 map_ligated_products(file_dict,word_size)
 
-#   map too short or unmappable pair-end reads to expected short sequences
+#   map too short or unmappable reads to expected short sequences
 print("Mapping to expected short-reads")
 #   first case is unecessary, only present for completeness
 word_size = str(min(min_barcode_length+min_fwd_length,min_fwd_length,min_rvs_length))
