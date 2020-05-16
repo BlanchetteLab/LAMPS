@@ -32,6 +32,8 @@ Process 2C-ChIP sequencing data:
 
 ```python LAMPS.py ./2C-ChIP/LAMPS.config ./2C-ChIP/HOXA_2C-ChIP_primers.txt 2C-ChIP ./2C-ChIP/LAMPS_output```
 
+Note - creation of Bowtie 2 indices for 2C-ChIP ligated primer sequences takes ~1.5 hours to complete
+
 Process 5C sequencing data:
 
 ```python LAMPS.py ./5C/LAMPS.config ./5C/HOXA_5C_primers.txt 5C ./5C/LAMPS_output```
@@ -113,8 +115,11 @@ optional arguments:
   -h, --help		show this help message and exit
   --num_cpus		set the number of cpus - default = total_num_cpus-2
   --word_size     	set the minimum required sequence length for processing (BLAST) - default = automated calculation
+  --min_score		set Bowtie 2 min-score for end-to-end alignments (default = L,-0.2,-0.2)
   --no_index_build	don't re-build Bowtie 2 indices if present
 ```
+Note - if the following error is encountered when running LAMPS with the Bowtie 2 read aligner and "-\-no_index_build" argument, the Bowtie 2 indices most likely need to be rebuilt:
+```(ERR) bowtie2-align died with signal 11 (SEGV) (core dumped)```
 
 ## Testing
 All software was tested on Linux Ubuntu 12.04.5 LTS (GNU/Linux 3.2.0-86-generic x86_64).
