@@ -29,6 +29,7 @@ from os import environ
 from scipy.stats import spearmanr
 
 global aligner
+global min_score
 global num_threads
 global no_index_build
 
@@ -88,8 +89,8 @@ def blast_align(in_fasta,word_size,num_targets,out_file,db_path=None,hsps=False)
     
 def bowtie2_align(in_fasta,indices_prefix,out_file,report_all=False,local=False):
     """aligns sequences using Bowtie 2"""
-    command = ["bowtie2","--all"] if report_all else ["bowtie2","--local"] if local else ["bowtie2"]
-    command = command + ["-p",str(num_threads),"-x",indices_prefix,"-f",in_fasta,"-S",out_file,"--no-unal","--no-hd","--no-sq"]
+    command = ["bowtie2","--all"] if report_all else ["bowtie2","--local"] if local else ["bowtie2","--score-min",min_score]
+    command = command + ["-p",str(num_threads),"-x",indices_prefix,"-f",in_fasta,"-S",out_file,"--no-unal","--no-hd"]
     align_sequences(command,out_file.replace(".sam",".log"))
 
 def create_blast_database(log_file,in_fasta,out_prefix):
@@ -404,7 +405,7 @@ def map_ligated_products(file_dict,word_size):
         print_flush(''.join(["\tMapping '",basename,"' ... "]))
         query_file = out_file
         out_file = out_file.replace(".fasta",".mapped.sam") if aligner == "bowtie2" else out_file.replace(".fasta",".mapped.tsv")
-        if aligner == "bowtie2": 
+        if aligner == "bowtie2":
             bowtie2_align(query_file,out_prefix,out_file)
         else:
             blast_align(query_file,word_size,1,out_file,db_path=out_prefix)
@@ -808,6 +809,7 @@ parser.add_argument("type", help = "source of LMA reads:[2C-ChIP,5C]")
 parser.add_argument("output", help = "path to output folder", type = str)
 parser.add_argument("--num_cpus", help = "set the number of cpus - default = num_cpus-2", type = str)
 parser.add_argument("--word_size", help = "set the minimum required sequence length for processing (BLAST)", type = int)
+parser.add_argument("--min_score", help = "set Bowtie 2 min-score for end-to-end alignments (default = L,-0.2,-0.2)", type = str)
 parser.add_argument("--no_index_build", help = "don't re-build Bowtie 2 indices if present", action = "store_true")
 args = parser.parse_args()
 
@@ -816,6 +818,7 @@ assert(args.type in ["2C-ChIP","5C"]),"Error - invalid type provided. Please spe
 short_read_dict = None
 num_threads = str(multiprocessing.cpu_count()-2) if args.num_cpus == None else str(args.num_cpus)
 no_index_build = args.no_index_build
+min_score = args.min_score if args.min_score else "L,-0.2,-0.2"
 
 args.output = create_directory(args.output)
 primer_dir = create_directory(os.path.join(args.output,"primer_files",''))
