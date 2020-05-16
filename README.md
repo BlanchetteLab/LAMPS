@@ -118,7 +118,7 @@ optional arguments:
   --min_score		set Bowtie 2 min-score for end-to-end alignments (default = L,-0.2,-0.2)
   --no_index_build	don't re-build Bowtie 2 indices if present
 ```
-Note - if the following error is encountered when running LAMPS with the Bowtie 2 read aligner and "-\-no_index_build" argument, the Bowtie 2 indices most likely need to be rebuilt:
+Note - if the following error is encountered when running LAMPS with the Bowtie 2 read aligner and "-\-no_index_build" argument, the Bowtie 2 indices most likely need to be rebuilt:\
 ```(ERR) bowtie2-align died with signal 11 (SEGV) (core dumped)```
 
 ## Testing
