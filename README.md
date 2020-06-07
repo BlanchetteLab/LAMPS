@@ -124,6 +124,12 @@ Note - if the following error is encountered when running LAMPS with the Bowtie 
 ## Testing
 All software was tested on Linux Ubuntu 12.04.5 LTS (GNU/Linux 3.2.0-86-generic x86_64).
 
+## Citing LAMPS
+
+If LAMPS was used in your analysis, please cite:
+
+Cameron, C.J.F., Wang, X.Q.D., Dostie, J. and Blanchette, M. (2020) LAMPS: an analysis pipeline for sequence-specific ligation-mediated amplification reads.  _BMC Res Notes_  **13**, 273. doi:  [https://doi.org/10.1186/s13104-020-05106-1](https://doi.org/10.1186/s13104-020-05106-1)
+
 ## License:
 LAMPS is free software: you can redistribute it and/or modify it under the terms of the GNU Lesser General Public License as published by the Free Software Foundation.
 
